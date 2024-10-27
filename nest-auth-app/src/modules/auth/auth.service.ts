@@ -1,4 +1,9 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -22,7 +27,10 @@ export class AuthService {
       username: username,
     };
 
-    const { accessToken, refreshToken } = await this.generateTokens(payload);
+    const { accessToken, refreshToken } = await this.generateTokens(
+      username,
+      payload,
+    );
 
     const updatedUser = await this.usersService.update(username, {
       refreshToken,
@@ -39,7 +47,7 @@ export class AuthService {
       await this.usersService.findOne(username);
 
     try {
-      if (!argon2.verify(passwordHash, password)) {
+      if (!(await argon2.verify(passwordHash, password))) {
         return null;
       }
     } catch (err) {
@@ -62,37 +70,76 @@ export class AuthService {
   }
 
   async generateTokens(
+    username: string,
     payload: JwtPayload,
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+    refresh?: boolean,
+  ): Promise<{ accessToken: string; refreshToken?: string }> {
+    if (!payload) {
+      throw new BadRequestException('Check your data');
+    }
+
     const accessToken = await this.jwtService.signAsync(payload, {
       expiresIn: '15m',
     });
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '7d',
-    });
 
-    return { accessToken, refreshToken };
+    if (refresh) {
+      const refreshToken = await this.jwtService.signAsync(payload, {
+        expiresIn: '7d',
+      });
+
+      await this.usersService.update(username, {
+        refreshToken,
+      });
+
+      return { accessToken, refreshToken };
+    }
+
+    return { accessToken };
   }
 
-  async refreshTokens(username: string) {
+  async refreshAccessToken(username: string, cookies: any) {
+    if (!username) {
+      throw new BadRequestException('Check your data');
+    }
+
+    if (!cookies['refreshToken']) {
+      throw new UnauthorizedException('Log in your account');
+    }
+
+    console.log(cookies['refreshToken'] + '\n\n');
+
     const { id, refreshToken } = await this.usersService.findOne(username);
+
+    if (refreshToken !== cookies['refreshToken']) {
+      throw new UnauthorizedException('Log in your account');
+    }
+
     const payload = {
       sub: id,
       username: username,
     };
 
-    if (await this.jwtService.verifyAsync(refreshToken)) {
-      const { accessToken } = await this.generateTokens(payload);
-      return { accessToken, refreshToken: refreshToken };
+    try {
+      const isValid = await this.jwtService.verifyAsync(refreshToken);
+
+      if (isValid) {
+        const { accessToken } = await this.generateTokens(username, payload);
+        return { accessToken, refreshToken };
+      } else {
+        throw new UnauthorizedException('Invalid token');
+      }
+    } catch (err) {
+      console.log('Ошибка верификации:', err);
+      throw new UnauthorizedException('Log in your account');
     }
 
-    const { accessToken, refreshToken: newRefreshToken } =
-      await this.generateTokens(payload);
+    // const { accessToken, refreshToken: newRefreshToken } =
+    //   await this.generateTokens(payload);
 
-    await this.usersService.update(username, {
-      refreshToken: newRefreshToken,
-    });
-
-    return { accessToken, refreshToken: newRefreshToken };
+    // await this.usersService.update(username, {
+    //   refreshToken: newRefreshToken,
+    // });
   }
 }
+
+// `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6Iklnb3IgUnVzc2toMiIsImlhdCI6MTcyOTg5NTc3NiwiZXhwIjoxNzMwNTAwNTc2fQ.tMuKXFhoIsIt-9WxV6tnOP4fVV2YG3m0rZPrqrhQdW8`;

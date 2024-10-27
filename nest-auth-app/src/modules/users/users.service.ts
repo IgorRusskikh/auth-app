@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   InternalServerErrorException,
@@ -16,6 +17,10 @@ export class UsersService {
   }
 
   async findOne(username: string) {
+    if (!username) {
+      throw new BadRequestException('Check your data');
+    }
+
     const user = await this.prismaService.user.findUnique({
       where: {
         username,
